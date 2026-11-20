@@ -26,4 +26,3 @@ func HttpGetAdvertisements(t *testing.T, token string, textForSearch string) *ht
 		Status(http.StatusOK).
 		End().Response
 }
-

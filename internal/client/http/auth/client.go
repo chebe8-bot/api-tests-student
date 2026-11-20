@@ -19,3 +19,12 @@ func HttpPostAuthLogin(t *testing.T, request authModels.LoginRequest) *http.Resp
 		Status(http.StatusOK).
 		End().Response
 }
+
+// HttpPostAuthRegister отправляет POST-запрос на регистрацию нового пользователя
+func HttpPostAuthRegister(t *testing.T, requestBody interface{}) *http.Response {
+	return apiRunner.GetRunner().Create().Post(path.AuthRegisterPath).
+		ContentType("application/json").
+		JSON(requestBody).
+		Expect(t).
+		End().Response
+}
