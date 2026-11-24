@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	favClient "api-tests-template/internal/client/http/favorites"
+	adClient "api-tests-template/internal/client/http/advertisement"
 	"api-tests-template/internal/managers/auth"
 
 	"github.com/joho/godotenv"
@@ -42,48 +42,54 @@ func (s *AdvertisementSuite) SetupSuite() {
 
 func (s *AdvertisementSuite) TestCreateGetAndDeleteAdvertisementPositive() {
 	title := fmt.Sprintf("TestProduct_%d", time.Now().UnixNano())
+	description := "Описание тестового объявления для проверки API"
 	fields := map[string]string{
 		"title":       title,
-		"description": "Описание тестового объявления",
+		"description": description,
 		"price":       "1500",
 		"quantity":    "2",
 	}
 
 	// 1. Создание объявления
-	createResp := favClient.HttpPostAdvertisement(s.T(), s.token, fields, validPhotoPath)
+	createResp := adClient.HttpPostAdvertisement(s.T(), s.token, fields, validPhotoPath)
 	defer createResp.Body.Close()
-	require.Equal(s.T(), http.StatusCreated, createResp.StatusCode, "Ожидался статус 201 Created при создании объявления")
-
 	createBody, err := io.ReadAll(createResp.Body)
 	require.NoError(s.T(), err, "Ошибка чтения тела ответа при создании объявления")
+	require.Equal(s.T(), http.StatusCreated, createResp.StatusCode, "Ожидался 201 Created, получено: %s", string(createBody))
+
 	adID := gjson.GetBytes(createBody, "id").String()
-	require.NotEmpty(s.T(), adID, "ID созданного объявления не должен быть пустым")
+	require.NotEmpty(s.T(), adID, "ID созданного объявления не должен быть пустым, ответ: %s", string(createBody))
 
-	// 2. Получение объявления по ID
-	getResp := favClient.HttpGetAdvertisementByID(s.T(), s.token, adID)
+	// 2. Получение объявления по ID и полная сверка полей
+	getResp := adClient.HttpGetAdvertisementByID(s.T(), s.token, adID)
 	defer getResp.Body.Close()
-	require.Equal(s.T(), http.StatusOK, getResp.StatusCode, "Ожидался статус 200 OK при получении объявления по ID")
-
 	getBody, err := io.ReadAll(getResp.Body)
 	require.NoError(s.T(), err, "Ошибка чтения тела ответа при получении объявления")
-	assert.Equal(s.T(), title, gjson.GetBytes(getBody, "title").String(), "Заголовок полученного объявления должен совпадать с созданным")
+	require.Equal(s.T(), http.StatusOK, getResp.StatusCode, "Ожидался 200 OK при GET /advertisement, ответ: %s", string(getBody))
+
+	assert.Equal(s.T(), adID, gjson.GetBytes(getBody, "id").String(), "ID объявления не совпадает, ответ: %s", string(getBody))
+	assert.Equal(s.T(), title, gjson.GetBytes(getBody, "title").String(), "Title объявления не совпадает, ответ: %s", string(getBody))
+	assert.Equal(s.T(), description, gjson.GetBytes(getBody, "description").String(), "Description объявления не совпадает, ответ: %s", string(getBody))
+	assert.Equal(s.T(), int64(1500), gjson.GetBytes(getBody, "price").Int(), "Price объявления не совпадает, ответ: %s", string(getBody))
+	assert.Equal(s.T(), int64(2), gjson.GetBytes(getBody, "quantity").Int(), "Quantity объявления не совпадает, ответ: %s", string(getBody))
 
 	// 3. Проверка появления созданного объявления в поиске GET /advertisements?search={title}
 	var foundIDs []string
 	var lastSearchStatus int
+	var lastSearchBody []byte
 	for attempt := 0; attempt < 3; attempt++ {
-		searchResp := favClient.HttpSearchAdvertisements(s.T(), s.token, title)
+		searchResp := adClient.HttpSearchAdvertisements(s.T(), s.token, title)
 		lastSearchStatus = searchResp.StatusCode
-		searchBody, _ := io.ReadAll(searchResp.Body)
+		lastSearchBody, _ = io.ReadAll(searchResp.Body)
 		searchResp.Body.Close()
 
 		if searchResp.StatusCode == http.StatusOK {
-			gjson.GetBytes(searchBody, "items.#.id").ForEach(func(_, val gjson.Result) bool {
+			gjson.GetBytes(lastSearchBody, "items.#.id").ForEach(func(_, val gjson.Result) bool {
 				foundIDs = append(foundIDs, val.String())
 				return true
 			})
 			if len(foundIDs) == 0 {
-				gjson.GetBytes(searchBody, "#.id").ForEach(func(_, val gjson.Result) bool {
+				gjson.GetBytes(lastSearchBody, "#.id").ForEach(func(_, val gjson.Result) bool {
 					foundIDs = append(foundIDs, val.String())
 					return true
 				})
@@ -92,123 +98,134 @@ func (s *AdvertisementSuite) TestCreateGetAndDeleteAdvertisementPositive() {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	require.Equal(s.T(), http.StatusOK, lastSearchStatus, "Ожидался статус 200 OK при поиске объявления по title")
-	assert.Contains(s.T(), foundIDs, adID, "Созданное объявление должно находиться через GET /advertisements?search={title}")
+	require.Equal(s.T(), http.StatusOK, lastSearchStatus, "Ожидался 200 OK при поиске объявления, ответ: %s", string(lastSearchBody))
+	assert.Contains(s.T(), foundIDs, adID, "Созданное объявление должно находиться через GET /advertisements?search={title}, ответ: %s", string(lastSearchBody))
 
-	// 4. Проверка фотографий
-	photosResp := favClient.HttpGetAdvertisementPhotos(s.T(), s.token, adID)
+	// 4. Проверка фотографий (id и url)
+	photosResp := adClient.HttpGetAdvertisementPhotos(s.T(), s.token, adID)
 	defer photosResp.Body.Close()
-	require.Equal(s.T(), http.StatusOK, photosResp.StatusCode, "Ожидался статус 200 OK при получении фотографий объявления")
+	photosBody, err := io.ReadAll(photosResp.Body)
+	require.NoError(s.T(), err, "Ошибка чтения ответа при получении фото")
+	require.Equal(s.T(), http.StatusOK, photosResp.StatusCode, "Ожидался 200 OK при получении фото, ответ: %s", string(photosBody))
+
+	photoID := gjson.GetBytes(photosBody, "0.id").String()
+	photoURL := gjson.GetBytes(photosBody, "0.url").String()
+	if photoID == "" {
+		photoID = gjson.GetBytes(photosBody, "photos.0.id").String()
+		photoURL = gjson.GetBytes(photosBody, "photos.0.url").String()
+	}
+	assert.NotEmpty(s.T(), photoID, "ID фотографии не должен быть пустым, ответ: %s", string(photosBody))
+	assert.NotEmpty(s.T(), photoURL, "URL фотографии не должен быть пустым, ответ: %s", string(photosBody))
 
 	// 5. Удаление объявления и проверка 404
-	delResp := favClient.HttpDeleteAdvertisement(s.T(), s.token, adID)
+	delResp := adClient.HttpDeleteAdvertisement(s.T(), s.token, adID)
 	defer delResp.Body.Close()
-	require.Equal(s.T(), http.StatusNoContent, delResp.StatusCode, "Ожидался статус 204 No Content при удалении объявления")
+	require.Equal(s.T(), http.StatusNoContent, delResp.StatusCode, "Ожидался 204 No Content при удалении объявления")
 
-	getAfterDelResp := favClient.HttpGetAdvertisementByID(s.T(), s.token, adID)
+	getAfterDelResp := adClient.HttpGetAdvertisementByID(s.T(), s.token, adID)
 	defer getAfterDelResp.Body.Close()
-	assert.Equal(s.T(), http.StatusNotFound, getAfterDelResp.StatusCode, "Ожидался статус 404 Not Found при запросе удалённого объявления")
-	s.assertErrorBody(getAfterDelResp)
+	s.assertErrorStatusAndBody(getAfterDelResp, http.StatusNotFound, "при запросе удалённого объявления")
 }
 
 func (s *AdvertisementSuite) TestCreateAdvertisementNegative() {
-	// 1. Без токена -> 401
-	unauthResp := favClient.HttpPostAdvertisement(s.T(), "", map[string]string{
-		"title":       "Без токена",
-		"description": "Описание",
-	}, validPhotoPath)
-	defer unauthResp.Body.Close()
-	assert.Equal(s.T(), http.StatusUnauthorized, unauthResp.StatusCode, "Ожидался статус 401 Unauthorized без токена")
-	s.assertErrorBody(unauthResp)
+	s.Run("Без токена авторизации -> 401", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), "", map[string]string{
+			"title":       "Без токена",
+			"description": "Описание",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusUnauthorized, "без токена")
+	})
 
-	// 2. Без поля title -> 400
-	noTitleResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"description": "Нет заголовка",
-	}, validPhotoPath)
-	defer noTitleResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, noTitleResp.StatusCode, "Ожидался статус 400 Bad Request без поля title")
-	s.assertErrorBody(noTitleResp)
+	s.Run("Без обязательного поля title -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"description": "Нет заголовка",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "без поля title")
+	})
 
-	// 3. Пустой title -> 400
-	emptyTitleResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       "",
-		"description": "Пустой заголовок",
-	}, validPhotoPath)
-	defer emptyTitleResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, emptyTitleResp.StatusCode, "Ожидался статус 400 Bad Request при пустом title")
-	s.assertErrorBody(emptyTitleResp)
+	s.Run("Пустой title -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       "",
+			"description": "Пустой заголовок",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при пустом title")
+	})
 
-	// 4. Title длиннее лимита (300 символов) -> 400
-	longTitleResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       strings.Repeat("А", 300),
-		"description": "Слишком длинный заголовок",
-	}, validPhotoPath)
-	defer longTitleResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, longTitleResp.StatusCode, "Ожидался статус 400 Bad Request при превышении длины title")
-	s.assertErrorBody(longTitleResp)
+	s.Run("Title длиннее лимита (300 символов) -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       strings.Repeat("А", 300),
+			"description": "Слишком длинный заголовок",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при превышении длины title")
+	})
 
-	// 5. Строковая цена -> 400
-	strPriceResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       "Товар",
-		"description": "Строковая цена",
-		"price":       "not_a_number",
-	}, validPhotoPath)
-	defer strPriceResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, strPriceResp.StatusCode, "Ожидался статус 400 Bad Request при строковой цене")
-	s.assertErrorBody(strPriceResp)
+	s.Run("Строковая цена -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       "Товар",
+			"description": "Строковая цена",
+			"price":       "not_a_number",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при строковой цене")
+	})
 
-	// 6. Отрицательная цена -> 400
-	negPriceResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       "Товар",
-		"description": "Отрицательная цена",
-		"price":       "-100",
-	}, validPhotoPath)
-	defer negPriceResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, negPriceResp.StatusCode, "Ожидался статус 400 Bad Request при отрицательной цене")
-	s.assertErrorBody(negPriceResp)
+	s.Run("Отрицательная цена -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       "Товар",
+			"description": "Отрицательная цена",
+			"price":       "-100",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при отрицательной цене")
+	})
 
-	// 7. Строковое количество -> 400
-	strQtyResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       "Товар",
-		"description": "Строковое количество",
-		"quantity":    "abc",
-	}, validPhotoPath)
-	defer strQtyResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, strQtyResp.StatusCode, "Ожидался статус 400 Bad Request при строковом количестве")
-	s.assertErrorBody(strQtyResp)
+	s.Run("Строковое количество -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       "Товар",
+			"description": "Строковое количество",
+			"quantity":    "abc",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при строковом количестве")
+	})
 
-	// 8. Отрицательное количество -> 400
-	negQtyResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       "Товар",
-		"description": "Отрицательное количество",
-		"quantity":    "-5",
-	}, validPhotoPath)
-	defer negQtyResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, negQtyResp.StatusCode, "Ожидался статус 400 Bad Request при отрицательном количестве")
-	s.assertErrorBody(negQtyResp)
+	s.Run("Отрицательное количество -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       "Товар",
+			"description": "Отрицательное количество",
+			"quantity":    "-5",
+		}, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при отрицательном количестве")
+	})
 
-	// 9. Неподдерживаемый формат фото (.txt) -> 400
-	badPhotoResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       "Товар с текстовым файлом",
-		"description": "Неверный формат фото",
-	}, invalidPhotoPath)
-	defer badPhotoResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, badPhotoResp.StatusCode, "Ожидался статус 400 Bad Request при загрузке неподдерживаемого формата файла")
-	s.assertErrorBody(badPhotoResp)
+	s.Run("Неподдерживаемый формат фото (.txt) -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       "Товар с текстовым файлом",
+			"description": "Неверный формат фото",
+		}, invalidPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при загрузке неподдерживаемого формата файла")
+	})
 
-	// 10. Более 3 фото (4 шт.) -> 400
-	tooManyPhotosResp := favClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
-		"title":       "Много фото",
-		"description": "4 фото",
-	}, validPhotoPath, validPhotoPath, validPhotoPath, validPhotoPath)
-	defer tooManyPhotosResp.Body.Close()
-	assert.Equal(s.T(), http.StatusBadRequest, tooManyPhotosResp.StatusCode, "Ожидался статус 400 Bad Request при загрузке более 3 фотографий")
-	s.assertErrorBody(tooManyPhotosResp)
+	s.Run("Более 3 фотографий (4 шт.) -> 400", func() {
+		resp := adClient.HttpPostAdvertisement(s.T(), s.token, map[string]string{
+			"title":       "Много фото",
+			"description": "4 фото",
+		}, validPhotoPath, validPhotoPath, validPhotoPath, validPhotoPath)
+		defer resp.Body.Close()
+		s.assertErrorStatusAndBody(resp, http.StatusBadRequest, "при загрузке более 3 фотографий")
+	})
 }
 
-func (s *AdvertisementSuite) assertErrorBody(resp *http.Response) {
+func (s *AdvertisementSuite) assertErrorStatusAndBody(resp *http.Response, expectedStatus int, contextMsg string) {
 	body, err := io.ReadAll(resp.Body)
-	require.NoError(s.T(), err, "Ошибка чтения тела ответа с ошибкой")
-	assert.NotEmpty(s.T(), gjson.GetBytes(body, "error").String(), "Поле 'error' в теле ошибки не должно быть пустым: %s", string(body))
-	assert.NotEmpty(s.T(), gjson.GetBytes(body, "message").String(), "Поле 'message' в теле ошибки не должно быть пустым: %s", string(body))
+	require.NoError(s.T(), err, "Ошибка чтения тела ответа %s", contextMsg)
+	assert.Equal(s.T(), expectedStatus, resp.StatusCode, "Ожидался статус %d %s, получено тело: %s", expectedStatus, contextMsg, string(body))
+	assert.NotEmpty(s.T(), gjson.GetBytes(body, "error").String(), "Поле 'error' не должно быть пустым %s, тело: %s", contextMsg, string(body))
+	assert.NotEmpty(s.T(), gjson.GetBytes(body, "message").String(), "Поле 'message' не должно быть пустым %s, тело: %s", contextMsg, string(body))
 }

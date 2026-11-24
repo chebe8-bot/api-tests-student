@@ -13,13 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/tidwall/gjson"
 )
 
 type FavoritesPositiveSuite struct {
 	suite.Suite
-	buyerToken string
-	myUserID   string
+	buyerToken  string
+	sellerToken string
 }
 
 func TestFavoritesPositiveSuite(t *testing.T) {
@@ -29,76 +28,43 @@ func TestFavoritesPositiveSuite(t *testing.T) {
 func (s *FavoritesPositiveSuite) SetupSuite() {
 	_ = godotenv.Load("../../../.env")
 	_ = godotenv.Overload("../../../.env.override")
-	loginResp := auth.Login(s.T(), os.Getenv("TEST_LOGIN"), os.Getenv("TEST_PASSWORD"))
-	s.buyerToken = loginResp.Token
-	s.myUserID = loginResp.User.Id
+	s.buyerToken = auth.Login(s.T(), os.Getenv("TEST_LOGIN"), os.Getenv("TEST_PASSWORD")).Token
+	s.sellerToken = auth.Login(s.T(), os.Getenv("TEST_LOGIN_2"), os.Getenv("TEST_PASSWORD_2")).Token
 }
 
 func (s *FavoritesPositiveSuite) TestFavoritesFullLifecycle() {
-	adID := s.findForeignAdID()
-	require.NotEmpty(s.T(), adID, "На сайте должно быть хотя бы одно чужое объявление")
+	adID := createTestAd(s.T(), s.sellerToken, "FavPosAd")
+	defer func() {
+		r := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, adID)
+		r.Body.Close()
+	}()
 
-	// На всякий случай очищаем перед стартом теста
-	cleanResp := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, adID)
-	cleanResp.Body.Close()
-
-	// 1. Добавить в избранное -> есть в списке
+	// 1. Добавить в избранное -> есть в GET /favorites
 	addResp := favClient.HttpPostFavorite(s.T(), s.buyerToken, adID)
-	defer addResp.Body.Close()
-	require.Equal(s.T(), http.StatusCreated, addResp.StatusCode, "Ожидался статус 201 Created при добавлении в избранное")
-	assert.Contains(s.T(), s.getFavoriteAdIDs(), adID, "Добавленное объявление должно присутствовать в GET /favorites")
+	addBody, _ := io.ReadAll(addResp.Body)
+	addResp.Body.Close()
+	require.Equal(s.T(), http.StatusCreated, addResp.StatusCode, "Ожидался статус 201 Created при добавлении в избранное, тело: %s", string(addBody))
 
-	// 2. Удалить из избранного -> нет в списке
+	idsAfterAdd, favBody1 := getFavoriteAdIDs(s.T(), s.buyerToken)
+	assert.Contains(s.T(), idsAfterAdd, adID, "Добавленное объявление должно присутствовать в GET /favorites, тело: %s", favBody1)
+
+	// 2. Удалить из избранного -> нет в GET /favorites
 	delFavResp := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, adID)
-	defer delFavResp.Body.Close()
-	require.Equal(s.T(), http.StatusNoContent, delFavResp.StatusCode, "Ожидался статус 204 No Content при удалении из избранного")
-	assert.NotContains(s.T(), s.getFavoriteAdIDs(), adID, "Удалённое объявление должно отсутствовать в GET /favorites")
-}
+	delFavBody, _ := io.ReadAll(delFavResp.Body)
+	delFavResp.Body.Close()
+	require.Equal(s.T(), http.StatusNoContent, delFavResp.StatusCode, "Ожидался статус 204 No Content при удалении из избранного, тело: %s", string(delFavBody))
 
-func (s *FavoritesPositiveSuite) findForeignAdID() string {
-	resp := favClient.HttpGetAdvertisements(s.T(), s.buyerToken)
-	defer resp.Body.Close()
-	require.Equal(s.T(), http.StatusOK, resp.StatusCode, "Ожидался статус 200 OK при получении списка объявлений")
+	idsAfterDel, favBody2 := getFavoriteAdIDs(s.T(), s.buyerToken)
+	assert.NotContains(s.T(), idsAfterDel, adID, "Удалённое объявление должно отсутствовать в GET /favorites, тело: %s", favBody2)
 
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(s.T(), err, "Ошибка чтения списка объявлений")
+	// 3. Каскадный сценарий: снова добавляем -> продавец удаляет объявление -> оно исчезает из избранного
+	reAddResp := favClient.HttpPostFavorite(s.T(), s.buyerToken, adID)
+	reAddBody, _ := io.ReadAll(reAddResp.Body)
+	reAddResp.Body.Close()
+	require.Equal(s.T(), http.StatusCreated, reAddResp.StatusCode, "Ожидался статус 201 Created при повторном добавлении в избранное, тело: %s", string(reAddBody))
 
-	var foreignIDs []string
-	gjson.GetBytes(body, "items").ForEach(func(_, item gjson.Result) bool {
-		if item.Get("user_id").String() != s.myUserID {
-			foreignIDs = append(foreignIDs, item.Get("id").String())
-		}
-		return true
-	})
-	if len(foreignIDs) == 0 {
-		gjson.ParseBytes(body).ForEach(func(_, item gjson.Result) bool {
-			if item.Get("user_id").String() != s.myUserID {
-				foreignIDs = append(foreignIDs, item.Get("id").String())
-			}
-			return true
-		})
-	}
-	if len(foreignIDs) > 1 {
-		return foreignIDs[1]
-	}
-	if len(foreignIDs) == 1 {
-		return foreignIDs[0]
-	}
-	return ""
-}
+	deleteTestAd(s.T(), s.sellerToken, adID)
 
-func (s *FavoritesPositiveSuite) getFavoriteAdIDs() []string {
-	resp := favClient.HttpGetFavorites(s.T(), s.buyerToken)
-	defer resp.Body.Close()
-	require.Equal(s.T(), http.StatusOK, resp.StatusCode, "Ожидался статус 200 OK при получении списка избранного")
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(s.T(), err, "Ошибка чтения списка избранного")
-
-	var ids []string
-	gjson.GetBytes(body, "items.#.advertisement.id").ForEach(func(_, val gjson.Result) bool {
-		ids = append(ids, val.String())
-		return true
-	})
-	return ids
+	idsAfterAdDelete, favBody3 := getFavoriteAdIDs(s.T(), s.buyerToken)
+	assert.NotContains(s.T(), idsAfterAdDelete, adID, "После удаления объявления владельцем оно должно пропасть из избранного, тело: %s", favBody3)
 }
