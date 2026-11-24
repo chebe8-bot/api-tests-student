@@ -38,29 +38,31 @@ func (s *FavoritesPositiveSuite) TestFavoritesFullLifecycle() {
 	adID := s.findForeignAdID()
 	require.NotEmpty(s.T(), adID, "На сайте должно быть хотя бы одно чужое объявление")
 
-	// На всякий случай удаляем из избранного перед стартом теста
+	// На всякий случай очищаем перед стартом теста
 	cleanResp := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, adID)
 	cleanResp.Body.Close()
 
 	// 1. Добавить в избранное -> есть в списке
 	addResp := favClient.HttpPostFavorite(s.T(), s.buyerToken, adID)
 	defer addResp.Body.Close()
-	require.Equal(s.T(), http.StatusCreated, addResp.StatusCode)
-	assert.Contains(s.T(), s.getFavoriteAdIDs(), adID)
+	require.Equal(s.T(), http.StatusCreated, addResp.StatusCode, "Ожидался статус 201 Created при добавлении в избранное")
+	assert.Contains(s.T(), s.getFavoriteAdIDs(), adID, "Добавленное объявление должно присутствовать в GET /favorites")
 
 	// 2. Удалить из избранного -> нет в списке
 	delFavResp := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, adID)
 	defer delFavResp.Body.Close()
-	require.Equal(s.T(), http.StatusNoContent, delFavResp.StatusCode)
-	assert.NotContains(s.T(), s.getFavoriteAdIDs(), adID)
+	require.Equal(s.T(), http.StatusNoContent, delFavResp.StatusCode, "Ожидался статус 204 No Content при удалении из избранного")
+	assert.NotContains(s.T(), s.getFavoriteAdIDs(), adID, "Удалённое объявление должно отсутствовать в GET /favorites")
 }
 
 func (s *FavoritesPositiveSuite) findForeignAdID() string {
 	resp := favClient.HttpGetAdvertisements(s.T(), s.buyerToken)
 	defer resp.Body.Close()
-	require.Equal(s.T(), http.StatusOK, resp.StatusCode)
+	require.Equal(s.T(), http.StatusOK, resp.StatusCode, "Ожидался статус 200 OK при получении списка объявлений")
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err, "Ошибка чтения списка объявлений")
+
 	var foreignIDs []string
 	gjson.GetBytes(body, "items").ForEach(func(_, item gjson.Result) bool {
 		if item.Get("user_id").String() != s.myUserID {
@@ -77,10 +79,10 @@ func (s *FavoritesPositiveSuite) findForeignAdID() string {
 		})
 	}
 	if len(foreignIDs) > 1 {
-		return foreignIDs[1]
+		return foreignIDs
 	}
 	if len(foreignIDs) == 1 {
-		return foreignIDs[0]
+		return foreignIDs
 	}
 	return ""
 }
@@ -88,9 +90,11 @@ func (s *FavoritesPositiveSuite) findForeignAdID() string {
 func (s *FavoritesPositiveSuite) getFavoriteAdIDs() []string {
 	resp := favClient.HttpGetFavorites(s.T(), s.buyerToken)
 	defer resp.Body.Close()
-	require.Equal(s.T(), http.StatusOK, resp.StatusCode)
+	require.Equal(s.T(), http.StatusOK, resp.StatusCode, "Ожидался статус 200 OK при получении списка избранного")
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err, "Ошибка чтения списка избранного")
+
 	var ids []string
 	gjson.GetBytes(body, "items.#.advertisement.id").ForEach(func(_, val gjson.Result) bool {
 		ids = append(ids, val.String())

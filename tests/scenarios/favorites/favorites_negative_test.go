@@ -16,6 +16,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const validPhotoForFavorites = "../advertisement/testdata/valid.png"
+
 type FavoritesNegativeSuite struct {
 	suite.Suite
 	buyerToken string
@@ -40,38 +42,39 @@ func (s *FavoritesNegativeSuite) TestFavoritesNegativeCases() {
 	// 1. Несуществующий ID -> 404
 	addMissingResp := favClient.HttpPostFavorite(s.T(), s.buyerToken, nonExistentID)
 	defer addMissingResp.Body.Close()
-	assert.Equal(s.T(), http.StatusNotFound, addMissingResp.StatusCode)
+	assert.Equal(s.T(), http.StatusNotFound, addMissingResp.StatusCode, "Ожидался статус 404 Not Found при добавлении несуществующего объявления")
 	s.assertErrorBody(addMissingResp)
 
 	delMissingResp := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, nonExistentID)
 	defer delMissingResp.Body.Close()
-	assert.Equal(s.T(), http.StatusNotFound, delMissingResp.StatusCode)
+	assert.Equal(s.T(), http.StatusNotFound, delMissingResp.StatusCode, "Ожидался статус 404 Not Found при удалении несуществующего объявления из избранного")
 	s.assertErrorBody(delMissingResp)
 
 	// 2. Без авторизации -> 401
 	unauthGet := favClient.HttpGetFavorites(s.T(), "")
 	defer unauthGet.Body.Close()
-	assert.Equal(s.T(), http.StatusUnauthorized, unauthGet.StatusCode)
+	assert.Equal(s.T(), http.StatusUnauthorized, unauthGet.StatusCode, "Ожидался статус 401 Unauthorized при GET /favorites без токена")
 	s.assertErrorBody(unauthGet)
 
 	unauthPost := favClient.HttpPostFavorite(s.T(), "", nonExistentID)
 	defer unauthPost.Body.Close()
-	assert.Equal(s.T(), http.StatusUnauthorized, unauthPost.StatusCode)
+	assert.Equal(s.T(), http.StatusUnauthorized, unauthPost.StatusCode, "Ожидался статус 401 Unauthorized при POST /favorites без токена")
 	s.assertErrorBody(unauthPost)
 
 	unauthDel := favClient.HttpDeleteFavorite(s.T(), "", nonExistentID)
 	defer unauthDel.Body.Close()
-	assert.Equal(s.T(), http.StatusUnauthorized, unauthDel.StatusCode)
+	assert.Equal(s.T(), http.StatusUnauthorized, unauthDel.StatusCode, "Ожидался статус 401 Unauthorized при DELETE /favorites без токена")
 	s.assertErrorBody(unauthDel)
 
 	// 3. Своё объявление в избранное -> 403
 	ownAdResp := favClient.HttpPostAdvertisement(s.T(), s.buyerToken, map[string]string{
 		"title":       "Своё объявление",
 		"description": "Проверка 403",
-	}, 1)
+	}, validPhotoForFavorites)
 	defer ownAdResp.Body.Close()
-	require.Equal(s.T(), http.StatusCreated, ownAdResp.StatusCode)
-	ownBody, _ := io.ReadAll(ownAdResp.Body)
+	require.Equal(s.T(), http.StatusCreated, ownAdResp.StatusCode, "Ожидался статус 201 Created при создании собственного объявления")
+	ownBody, err := io.ReadAll(ownAdResp.Body)
+	require.NoError(s.T(), err, "Ошибка чтения ответа при создании собственного объявления")
 	ownAdID := gjson.GetBytes(ownBody, "id").String()
 	defer func() {
 		r := favClient.HttpDeleteAdvertisement(s.T(), s.buyerToken, ownAdID)
@@ -80,19 +83,19 @@ func (s *FavoritesNegativeSuite) TestFavoritesNegativeCases() {
 
 	addOwnResp := favClient.HttpPostFavorite(s.T(), s.buyerToken, ownAdID)
 	defer addOwnResp.Body.Close()
-	assert.Equal(s.T(), http.StatusForbidden, addOwnResp.StatusCode)
+	assert.Equal(s.T(), http.StatusForbidden, addOwnResp.StatusCode, "Ожидался статус 403 Forbidden при попытке добавить своё объявление в избранное")
 	s.assertErrorBody(addOwnResp)
 
 	// 4. Повторное добавление чужого объявления -> 409
 	foreignAdID := s.findForeignAdID()
-	require.NotEmpty(s.T(), foreignAdID)
+	require.NotEmpty(s.T(), foreignAdID, "На сайте должно быть хотя бы одно чужое объявление")
 
 	cleanResp := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, foreignAdID)
 	cleanResp.Body.Close()
 
 	firstAdd := favClient.HttpPostFavorite(s.T(), s.buyerToken, foreignAdID)
 	defer firstAdd.Body.Close()
-	require.Equal(s.T(), http.StatusCreated, firstAdd.StatusCode)
+	require.Equal(s.T(), http.StatusCreated, firstAdd.StatusCode, "Ожидался статус 201 Created при первом добавлении в избранное")
 	defer func() {
 		r := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, foreignAdID)
 		r.Body.Close()
@@ -100,16 +103,18 @@ func (s *FavoritesNegativeSuite) TestFavoritesNegativeCases() {
 
 	duplicateAdd := favClient.HttpPostFavorite(s.T(), s.buyerToken, foreignAdID)
 	defer duplicateAdd.Body.Close()
-	assert.Equal(s.T(), http.StatusConflict, duplicateAdd.StatusCode)
+	assert.Equal(s.T(), http.StatusConflict, duplicateAdd.StatusCode, "Ожидался статус 409 Conflict при повторном добавлении в избранное")
 	s.assertErrorBody(duplicateAdd)
 }
 
 func (s *FavoritesNegativeSuite) findForeignAdID() string {
 	resp := favClient.HttpGetAdvertisements(s.T(), s.buyerToken)
 	defer resp.Body.Close()
-	require.Equal(s.T(), http.StatusOK, resp.StatusCode)
+	require.Equal(s.T(), http.StatusOK, resp.StatusCode, "Ожидался статус 200 OK при получении списка объявлений")
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err, "Ошибка чтения списка объявлений")
+
 	var foreignID string
 	gjson.GetBytes(body, "items").ForEach(func(_, item gjson.Result) bool {
 		if item.Get("user_id").String() != s.myUserID {
@@ -132,7 +137,7 @@ func (s *FavoritesNegativeSuite) findForeignAdID() string {
 
 func (s *FavoritesNegativeSuite) assertErrorBody(resp *http.Response) {
 	body, err := io.ReadAll(resp.Body)
-	require.NoError(s.T(), err)
+	require.NoError(s.T(), err, "Ошибка чтения тела ответа с ошибкой")
 	assert.NotEmpty(s.T(), gjson.GetBytes(body, "error").String(), "Поле 'error' в теле ошибки не должно быть пустым: %s", string(body))
 	assert.NotEmpty(s.T(), gjson.GetBytes(body, "message").String(), "Поле 'message' в теле ошибки не должно быть пустым: %s", string(body))
 }
