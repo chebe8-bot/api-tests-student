@@ -79,10 +79,10 @@ func (s *FavoritesPositiveSuite) findForeignAdID() string {
 		})
 	}
 	if len(foreignIDs) > 1 {
-		return foreignIDs
+		return foreignIDs[1]
 	}
 	if len(foreignIDs) == 1 {
-		return foreignIDs
+		return foreignIDs[0]
 	}
 	return ""
 }
