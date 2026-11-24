@@ -137,3 +137,33 @@ func HttpGetAdvertisements(t *testing.T, token string) *http.Response {
 		Expect(t).
 		End().Response
 }
+
+func HttpSearchAdvertisements(t *testing.T, token, search string) *http.Response {
+	runner := apiRunner.GetRunner()
+	if token != "" {
+		runner = runner.Auth(token)
+	}
+	return runner.Create().
+		Get(path.AdvertisementsPath).
+		Query("search", search).
+		Expect(t).
+		End().Response
+}
+
+func HttpPostAdvertisementWithCustomFile(t *testing.T, token string, fields map[string]string, fileName string, fileContent []byte) *http.Response {
+	runner := apiRunner.GetRunner()
+	if token != "" {
+		runner = runner.Auth(token)
+	}
+
+	fsMap := fstest.MapFS{
+		fileName: &fstest.MapFile{Data: fileContent},
+	}
+
+	post := runner.Create().UseFS(fsMap).Post(path.AdvertisementPath)
+	for k, v := range fields {
+		post = post.MultipartFormData(k, v)
+	}
+	post = post.MultipartFile("photos", fileName)
+	return post.Expect(t).End().Response
+}

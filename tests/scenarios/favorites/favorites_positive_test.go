@@ -61,24 +61,28 @@ func (s *FavoritesPositiveSuite) findForeignAdID() string {
 	require.Equal(s.T(), http.StatusOK, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
-	var foreignID string
+	var foreignIDs []string
 	gjson.GetBytes(body, "items").ForEach(func(_, item gjson.Result) bool {
 		if item.Get("user_id").String() != s.myUserID {
-			foreignID = item.Get("id").String()
-			return false
+			foreignIDs = append(foreignIDs, item.Get("id").String())
 		}
 		return true
 	})
-	if foreignID == "" {
+	if len(foreignIDs) == 0 {
 		gjson.ParseBytes(body).ForEach(func(_, item gjson.Result) bool {
 			if item.Get("user_id").String() != s.myUserID {
-				foreignID = item.Get("id").String()
-				return false
+				foreignIDs = append(foreignIDs, item.Get("id").String())
 			}
 			return true
 		})
 	}
-	return foreignID
+	if len(foreignIDs) > 1 {
+		return foreignIDs[1]
+	}
+	if len(foreignIDs) == 1 {
+		return foreignIDs[0]
+	}
+	return ""
 }
 
 func (s *FavoritesPositiveSuite) getFavoriteAdIDs() []string {

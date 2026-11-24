@@ -41,23 +41,28 @@ func (s *FavoritesNegativeSuite) TestFavoritesNegativeCases() {
 	addMissingResp := favClient.HttpPostFavorite(s.T(), s.buyerToken, nonExistentID)
 	defer addMissingResp.Body.Close()
 	assert.Equal(s.T(), http.StatusNotFound, addMissingResp.StatusCode)
+	s.assertErrorBody(addMissingResp)
 
 	delMissingResp := favClient.HttpDeleteFavorite(s.T(), s.buyerToken, nonExistentID)
 	defer delMissingResp.Body.Close()
 	assert.Equal(s.T(), http.StatusNotFound, delMissingResp.StatusCode)
+	s.assertErrorBody(delMissingResp)
 
 	// 2. Без авторизации -> 401
 	unauthGet := favClient.HttpGetFavorites(s.T(), "")
 	defer unauthGet.Body.Close()
 	assert.Equal(s.T(), http.StatusUnauthorized, unauthGet.StatusCode)
+	s.assertErrorBody(unauthGet)
 
 	unauthPost := favClient.HttpPostFavorite(s.T(), "", nonExistentID)
 	defer unauthPost.Body.Close()
 	assert.Equal(s.T(), http.StatusUnauthorized, unauthPost.StatusCode)
+	s.assertErrorBody(unauthPost)
 
 	unauthDel := favClient.HttpDeleteFavorite(s.T(), "", nonExistentID)
 	defer unauthDel.Body.Close()
 	assert.Equal(s.T(), http.StatusUnauthorized, unauthDel.StatusCode)
+	s.assertErrorBody(unauthDel)
 
 	// 3. Своё объявление в избранное -> 403
 	ownAdResp := favClient.HttpPostAdvertisement(s.T(), s.buyerToken, map[string]string{
@@ -76,6 +81,7 @@ func (s *FavoritesNegativeSuite) TestFavoritesNegativeCases() {
 	addOwnResp := favClient.HttpPostFavorite(s.T(), s.buyerToken, ownAdID)
 	defer addOwnResp.Body.Close()
 	assert.Equal(s.T(), http.StatusForbidden, addOwnResp.StatusCode)
+	s.assertErrorBody(addOwnResp)
 
 	// 4. Повторное добавление чужого объявления -> 409
 	foreignAdID := s.findForeignAdID()
@@ -95,6 +101,7 @@ func (s *FavoritesNegativeSuite) TestFavoritesNegativeCases() {
 	duplicateAdd := favClient.HttpPostFavorite(s.T(), s.buyerToken, foreignAdID)
 	defer duplicateAdd.Body.Close()
 	assert.Equal(s.T(), http.StatusConflict, duplicateAdd.StatusCode)
+	s.assertErrorBody(duplicateAdd)
 }
 
 func (s *FavoritesNegativeSuite) findForeignAdID() string {
@@ -121,4 +128,11 @@ func (s *FavoritesNegativeSuite) findForeignAdID() string {
 		})
 	}
 	return foreignID
+}
+
+func (s *FavoritesNegativeSuite) assertErrorBody(resp *http.Response) {
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(s.T(), err)
+	assert.NotEmpty(s.T(), gjson.GetBytes(body, "error").String(), "Поле 'error' в теле ошибки не должно быть пустым: %s", string(body))
+	assert.NotEmpty(s.T(), gjson.GetBytes(body, "message").String(), "Поле 'message' в теле ошибки не должно быть пустым: %s", string(body))
 }
